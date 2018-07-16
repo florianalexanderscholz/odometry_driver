@@ -2,7 +2,7 @@ LDLIBS=-lrt -lpthread
 #CFLAGS=-g -Wall
 
 ifneq ($(KERNELRELEASE),)
-obj-m	:= tachol.o
+obj-m	:= odom_driver.o
 
 else
 KDIR	:= /lib/modules/$(shell uname -r)/build

@@ -1,5 +1,5 @@
 /**
- * @file   tacho.c
+ * @file   odom_driver.c
  * @author Florian Scholz & Jan Sacher
  * @date   6. June 2018
  * @brief  A kernel module for measuring odometry with photoelectric sensors
@@ -18,8 +18,8 @@
 #include <linux/uaccess.h>
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Florian Scholz & Jan Sacher");
-MODULE_DESCRIPTION("A driver for the odometry measuring ");
-MODULE_VERSION("0.1");
+MODULE_DESCRIPTION("A driver for calculating the rotary encoder state for the RoboChair project");
+MODULE_VERSION("0.2");
 
 #define GPIO_HIGH 1
 #define DEVICE_NAME "tachol"
@@ -41,8 +41,8 @@ static int last_l = 0;
 static int last_r = 0;
 static unsigned int gpioPortA = 17;	//PortA
 static unsigned int gpioPortB = 27;	//portB
-static unsigned int gpioPortC = 13;
-static unsigned int gpioPortD = 19;
+static unsigned int gpioPortC = 13; //PortC
+static unsigned int gpioPortD = 19; //PortD
 
 static unsigned int irqNumberA;		///< Used to share the IRQ number within this file
 static unsigned int irqNumberB;
@@ -51,41 +51,21 @@ static unsigned int irqNumberD;
 
 static int majorNumber;
 
-static irq_handler_t  ulsgpio_irq_handler_l(unsigned int irq, void *dev_id, struct pt_regs *regs);
-static irq_handler_t  ulsgpio_irq_handler_r(unsigned int irq, void *dev_id, struct pt_regs *regs);
+static irq_handler_t  odom_robochair_irq_handler_l(unsigned int irq, void *dev_id, struct pt_regs *regs);
+static irq_handler_t  odom_robochair_irq_handler_r(unsigned int irq, void *dev_id, struct pt_regs *regs);
 static struct class*  ulscharClass  = NULL; ///< The device-driver class struct pointer
 static struct device* ulscharDevice = NULL; ///< The device-driver device struct pointer
-//static wait_queue_head_t wq;
 
-//static enum Device_State deviceState = NotInitialized;
-
-//static spinlock_t time_lock;
-static int ulsgpio_open(struct inode *inodep, struct file *filep){
+static int odom_robochair_open(struct inode *inodep, struct file *filep){
    return 0;
 }
 
-#if 0
-static void print_ktime(const char* info, ktime_t sample) {
-  struct timespec ts_last = ktime_to_timespec(sample);
-  printk("%s: %ld\n",info, ts_last.tv_nsec);
-}
-#endif
-/*
-static void ulsgpio_send_trigger(void) {
-	gpio_set_value(gpioTriggerPort, 1); 
-	deviceState = Ready;
-	usleep_range(10,11);
-	gpio_set_value(gpioTriggerPort, 0);
-}
-*/
-static ssize_t ulsgpio_read(struct file *filep, char *buffer, size_t len, loff_t *offset){
+static ssize_t odom_robochair_read(struct file *filep, char *buffer, size_t len, loff_t *offset){
 	static char pbuf[256];
 	struct timespec ts_last;
 	int cnt;
 	int values[2] = {reedState_l, reedState_r};
 	len = sizeof(int)*2 -  copy_to_user((int*)buffer, values, min(len, sizeof(int)*2));
-	//cnt = snprintf(pbuf,min(sizeof(size_t)*256, len),"%d %d\n", reedState_l, reedState_r );
-	//len = cnt - copy_to_user(buffer, pbuf, cnt);
 	return len;
 	
 }
@@ -93,34 +73,32 @@ static ssize_t ulsgpio_read(struct file *filep, char *buffer, size_t len, loff_t
 static struct file_operations fops =
 {
 	.owner = THIS_MODULE,
-	.open = ulsgpio_open,
-	.read = ulsgpio_read
+	.open = odom_robochair_open,
+	.read = odom_robochair_read
 };
 
-static int __init ulsgpio_init(void){
+static int __init odom_robochair_init(void){
 	int result = 0;
-	//measurement_started = measurement_stopped = ktime_set(0,0);
-	//spin_lock_init(&time_lock);
-	printk(KERN_INFO "GPIO_TEST: Initializing the GPIO_TEST LKM\n");
+	printk(KERN_INFO "odometry: Initializing the odometry LKM\n");
 
 	if (!gpio_is_valid(gpioPortA)){
-		printk(KERN_INFO "GPIO_TEST: invalid GPIO A\n");
+		printk(KERN_INFO "odometry: invalid GPIO Port A\n");
 		return -ENODEV;
 	}
 	
 	if (!gpio_is_valid(gpioPortB)){
-		printk(KERN_INFO "GPIO_TEST: invalid GPIO B\n");
+		printk(KERN_INFO "odometry: invalid GPIO Port B\n");
 		return -ENODEV;
 	}
 
 
 	if (!gpio_is_valid(gpioPortC)){
-		printk(KERN_INFO "GPIO_TEST: invalid GPIO C\n");
+		printk(KERN_INFO "odometry: invalid GPIO Port C\n");
 		return -ENODEV;
 	}
 	
 	if (!gpio_is_valid(gpioPortD)){
-		printk(KERN_INFO "GPIO_TEST: invalid GPIO D\n");
+		printk(KERN_INFO "odometry: invalid GPIO Port DD\n");
 		return -ENODEV;
 	}
 
@@ -162,37 +140,34 @@ static int __init ulsgpio_init(void){
 	gpio_direction_input(gpioPortD);
 	gpio_export(gpioPortD, false);
 
-	//init_waitqueue_head(&wq);
-
-
 	irqNumberA = gpio_to_irq(gpioPortA);
 	irqNumberB = gpio_to_irq(gpioPortB);
 	irqNumberC = gpio_to_irq(gpioPortC);
 	irqNumberD = gpio_to_irq(gpioPortD);
 
 	result = request_irq(irqNumberA,
-	(irq_handler_t) ulsgpio_irq_handler_l,
+	(irq_handler_t) odom_robochair_irq_handler_l,
 	IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING,
 	"uls_gpio_handlerl",
 	NULL);
 
 
 	result = request_irq(irqNumberB,
-	(irq_handler_t) ulsgpio_irq_handler_l,
+	(irq_handler_t) odom_robochair_irq_handler_l,
 	IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING,
 	"uls_gpio_handlerl",
 	NULL);
 
 
 	result = request_irq(irqNumberC,
-	(irq_handler_t) ulsgpio_irq_handler_r,
+	(irq_handler_t) odom_robochair_irq_handler_r,
 	IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING,
 	"uls_gpio_handlerr",
 	NULL);
 
 
 	result = request_irq(irqNumberD,
-	(irq_handler_t) ulsgpio_irq_handler_r,
+	(irq_handler_t) odom_robochair_irq_handler_r,
 	IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING,
 	"uls_gpio_handlerr",
 	NULL);
@@ -201,34 +176,31 @@ return result;
 }
 
 
-static void ulsgpio_release_gpio_port(unsigned int gpioPort) {
+static void odom_robochair_release_gpio_port(unsigned int gpioPort) {
 	gpio_unexport(gpioPort);
 	gpio_free(gpioPort);;
 }
 
-static void __exit ulsgpio_exit(void) {
-	 /* Removing the IRQ routine */
-	free_irq(irqNumberA, 0);
+static void __exit odom_robochair_exit(void) {
+	
+  free_irq(irqNumberA, 0);
 	free_irq(irqNumberB, 0);
 	free_irq(irqNumberC, 0);
 	free_irq(irqNumberD, 0);
 
-	ulsgpio_release_gpio_port(gpioPortA);
-	ulsgpio_release_gpio_port(gpioPortB);
-	ulsgpio_release_gpio_port(gpioPortC);
-	ulsgpio_release_gpio_port(gpioPortD);
+	odom_robochair_release_gpio_port(gpioPortA);
+	odom_robochair_release_gpio_port(gpioPortB);
+	odom_robochair_release_gpio_port(gpioPortC);
+	odom_robochair_release_gpio_port(gpioPortD);
 
-	/* Remove udev stuff */
 	device_destroy(ulscharClass, MKDEV(majorNumber, 0));
 	class_unregister(ulscharClass);
 	class_destroy(ulscharClass);
 
-	/* Remove character device */
 	unregister_chrdev(majorNumber, DEVICE_NAME);
 }
 
-static irq_handler_t ulsgpio_irq_handler_l(unsigned int irq, void *dev_id, struct pt_regs *regs){
-	/*int gpio_number = gpioEchoPort;*/
+static irq_handler_t odom_robochair_irq_handler_l(unsigned int irq, void *dev_id, struct pt_regs *regs){
 	if (irq == irqNumberA){
 		int value = gpio_get_value(gpioPortA);
                 if(value == GPIO_HIGH)
@@ -329,8 +301,7 @@ static irq_handler_t ulsgpio_irq_handler_l(unsigned int irq, void *dev_id, struc
 }
 
 
-static irq_handler_t ulsgpio_irq_handler_r(unsigned int irq, void *dev_id, struct pt_regs *regs){
-	/*int gpio_number = gpioEchoPort;*/
+static irq_handler_t odom_robochair_irq_handler_r(unsigned int irq, void *dev_id, struct pt_regs *regs){
 	if (irq == irqNumberC){
 		int value = gpio_get_value(gpioPortC);
                 if(value == GPIO_HIGH)
@@ -430,5 +401,5 @@ static irq_handler_t ulsgpio_irq_handler_r(unsigned int irq, void *dev_id, struc
 	}
 	return (irq_handler_t) IRQ_HANDLED;
 }
-module_init(ulsgpio_init);
-module_exit(ulsgpio_exit);
+module_init(odom_robochair_init);
+module_exit(odom_robochair_exit);
